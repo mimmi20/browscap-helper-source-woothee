@@ -22,29 +22,31 @@ class WootheeSource implements SourceInterface
      */
     public function getUserAgents(Logger $logger, OutputInterface $output, $limit = 0)
     {
+        $counter   = 0;
         $allAgents = [];
 
-        foreach ($this->loadFromPath($output) as $dataFile) {
-            if ($limit && count($allAgents) >= $limit) {
-                break;
+        foreach ($this->loadFromPath($output) as $data) {
+            if ($limit && $counter >= $limit) {
+                return;
             }
 
-            $agentsFromFile = $this->mapWoothee($dataFile);
+            foreach ($data as $row) {
+                if ($limit && $counter >= $limit) {
+                    return;
+                }
 
-            $output->writeln(' [added ' . str_pad(number_format(count($allAgents)), 12, ' ', STR_PAD_LEFT) . ' agent' . (count($allAgents) !== 1 ? 's' : '') . ' so far]');
+                if (empty($row['target'])) {
+                    continue;
+                }
 
-            $newAgents = array_diff($agentsFromFile, $allAgents);
-            $allAgents = array_merge($allAgents, $newAgents);
-        }
+                if (array_key_exists($row['target'], $allAgents)) {
+                    continue;
+                }
 
-        $i = 0;
-        foreach ($allAgents as $agent) {
-            if ($limit && $i >= $limit) {
-                return null;
+                yield $row['target'];
+                $allAgents[$row['target']] = 1;
+                ++$counter;
             }
-
-            ++$i;
-            yield $agent;
         }
     }
 
@@ -58,16 +60,18 @@ class WootheeSource implements SourceInterface
     {
         $allTests = [];
 
-        foreach ($this->loadFromPath($output) as $dataFile) {
-            $agentsFromFile = $this->mapWoothee($dataFile);
-
-            foreach ($agentsFromFile as $ua) {
-                if (array_key_exists($ua, $allTests)) {
+        foreach ($this->loadFromPath($output) as $data) {
+            foreach ($data as $row) {
+                if (empty($row['target'])) {
                     continue;
                 }
 
-                $allTests[$ua] = [
-                    'ua'         => $ua,
+                if (array_key_exists($row['target'], $allTests)) {
+                    continue;
+                }
+
+                $test = [
+                    'ua'         => $row['target'],
                     'properties' => [
                         'Browser_Name'            => null,
                         'Browser_Type'            => null,
@@ -93,13 +97,10 @@ class WootheeSource implements SourceInterface
                         'RenderingEngine_Maker'   => null,
                     ],
                 ];
-            }
-        }
 
-        $i = 0;
-        foreach ($allTests as $ua => $test) {
-            ++$i;
-            yield [$ua => $test];
+                yield [$row['target'] => $test];
+                $allTests[$row['target']] = 1;
+            }
         }
     }
 
