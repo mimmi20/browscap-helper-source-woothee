@@ -22,29 +22,31 @@ class WootheeSource implements SourceInterface
      */
     public function getUserAgents(Logger $logger, OutputInterface $output, $limit = 0)
     {
+        $counter   = 0;
         $allAgents = [];
 
-        foreach ($this->loadFromPath($output) as $dataFile) {
-            if ($limit && count($allAgents) >= $limit) {
-                break;
+        foreach ($this->loadFromPath($output) as $data) {
+            if ($limit && $counter >= $limit) {
+                return;
             }
 
-            $agentsFromFile = $this->mapWoothee($dataFile);
+            foreach ($data as $row) {
+                if ($limit && $counter >= $limit) {
+                    return;
+                }
 
-            $output->writeln(' [added ' . str_pad(number_format(count($allAgents)), 12, ' ', STR_PAD_LEFT) . ' agent' . (count($allAgents) !== 1 ? 's' : '') . ' so far]');
+                if (empty($row['target'])) {
+                    continue;
+                }
 
-            $newAgents = array_diff($agentsFromFile, $allAgents);
-            $allAgents = array_merge($allAgents, $newAgents);
-        }
+                if (array_key_exists($row['target'], $allAgents)) {
+                    continue;
+                }
 
-        $i = 0;
-        foreach ($allAgents as $agent) {
-            if ($limit && $i >= $limit) {
-                return null;
+                yield $row['target'];
+                $allAgents[$row['target']] = 1;
+                ++$counter;
             }
-
-            ++$i;
-            yield $agent;
         }
     }
 
@@ -58,22 +60,47 @@ class WootheeSource implements SourceInterface
     {
         $allTests = [];
 
-        foreach ($this->loadFromPath($output) as $dataFile) {
-            $agentsFromFile = $this->mapWoothee($dataFile);
-
-            foreach ($agentsFromFile as $ua) {
-                if (array_key_exists($ua, $allTests)) {
+        foreach ($this->loadFromPath($output) as $data) {
+            foreach ($data as $row) {
+                if (empty($row['target'])) {
                     continue;
                 }
 
-                $allTests[$ua] = [];
-            }
-        }
+                if (array_key_exists($row['target'], $allTests)) {
+                    continue;
+                }
 
-        $i = 0;
-        foreach ($allTests as $ua => $test) {
-            ++$i;
-            yield [$ua => $test];
+                $test = [
+                    'ua'         => $row['target'],
+                    'properties' => [
+                        'Browser_Name'            => null,
+                        'Browser_Type'            => null,
+                        'Browser_Bits'            => null,
+                        'Browser_Maker'           => null,
+                        'Browser_Modus'           => null,
+                        'Browser_Version'         => null,
+                        'Platform_Codename'       => null,
+                        'Platform_Marketingname'  => null,
+                        'Platform_Version'        => null,
+                        'Platform_Bits'           => null,
+                        'Platform_Maker'          => null,
+                        'Platform_Brand_Name'     => null,
+                        'Device_Name'             => null,
+                        'Device_Maker'            => null,
+                        'Device_Type'             => null,
+                        'Device_Pointing_Method'  => null,
+                        'Device_Dual_Orientation' => null,
+                        'Device_Code_Name'        => null,
+                        'Device_Brand_Name'       => null,
+                        'RenderingEngine_Name'    => null,
+                        'RenderingEngine_Version' => null,
+                        'RenderingEngine_Maker'   => null,
+                    ],
+                ];
+
+                yield [$row['target'] => $test];
+                $allTests[$row['target']] = 1;
+            }
         }
     }
 
