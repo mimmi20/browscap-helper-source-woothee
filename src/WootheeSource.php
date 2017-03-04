@@ -11,9 +11,17 @@
 declare(strict_types = 1);
 namespace BrowscapHelper\Source;
 
+use BrowserDetector\Loader\NotFoundException;
+use BrowserDetector\Version\Version;
+use Psr\Cache\CacheItemPoolInterface;
 use Psr\Log\LoggerInterface;
-use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Finder\Finder;
 use Symfony\Component\Yaml\Yaml;
+use UaDataMapper\BrowserNameMapper;
+use UaDataMapper\BrowserTypeMapper;
+use UaDataMapper\BrowserVersionMapper;
+use UaDataMapper\PlatformNameMapper;
+use UaDataMapper\PlatformVersionMapper;
 use UaResult\Browser\Browser;
 use UaResult\Device\Device;
 use UaResult\Engine\Engine;
@@ -29,23 +37,23 @@ use Wurfl\Request\GenericRequestFactory;
 class WootheeSource implements SourceInterface
 {
     /**
-     * @var \Symfony\Component\Console\Output\OutputInterface
-     */
-    private $output = null;
-
-    /**
      * @var \Psr\Log\LoggerInterface
      */
     private $logger = null;
 
     /**
-     * @param \Psr\Log\LoggerInterface                          $logger
-     * @param \Symfony\Component\Console\Output\OutputInterface $output
+     * @var \Psr\Cache\CacheItemPoolInterface|null
      */
-    public function __construct(LoggerInterface $logger, OutputInterface $output)
+    private $cache = null;
+
+    /**
+     * @param \Psr\Log\LoggerInterface          $logger
+     * @param \Psr\Cache\CacheItemPoolInterface $cache
+     */
+    public function __construct(LoggerInterface $logger, CacheItemPoolInterface $cache)
     {
         $this->logger = $logger;
-        $this->output = $output;
+        $this->cache  = $cache;
     }
 
     /**
@@ -55,31 +63,17 @@ class WootheeSource implements SourceInterface
      */
     public function getUserAgents($limit = 0)
     {
-        $counter   = 0;
-        $allAgents = [];
+        $counter = 0;
 
-        foreach ($this->loadFromPath() as $data) {
+        foreach ($this->loadFromPath() as $row) {
             if ($limit && $counter >= $limit) {
                 return;
             }
 
-            foreach ($data as $row) {
-                if ($limit && $counter >= $limit) {
-                    return;
-                }
+            $row = json_decode($row, false);
 
-                if (empty($row['target'])) {
-                    continue;
-                }
-
-                if (array_key_exists($row['target'], $allAgents)) {
-                    continue;
-                }
-
-                yield $row['target'];
-                $allAgents[$row['target']] = 1;
-                ++$counter;
-            }
+            yield $row->target;
+            ++$counter;
         }
     }
 
@@ -88,32 +82,48 @@ class WootheeSource implements SourceInterface
      */
     public function getTests()
     {
-        $allTests = [];
+        foreach ($this->loadFromPath() as $row) {
+            $row     = json_decode($row, false);
+            $request = (new GenericRequestFactory())->createRequestForUserAgent($row->target);
 
-        foreach ($this->loadFromPath() as $data) {
-            foreach ($data as $row) {
-                if (empty($row['target'])) {
-                    continue;
-                }
+            $browserName = (new BrowserNameMapper())->mapBrowserName($row->name);
 
-                if (array_key_exists($row['target'], $allTests)) {
-                    continue;
-                }
-
-                $request  = (new GenericRequestFactory())->createRequestForUserAgent($row['target']);
-                $browser  = new Browser(null);
-                $device   = new Device(null, null);
-                $platform = new Os(null, null);
-                $engine   = new Engine(null);
-
-                yield $row['target'] => new Result($request, $device, $platform, $browser, $engine);
-                $allTests[$row['target']] = 1;
+            try {
+                $browserType = (new BrowserTypeMapper())->mapBrowserType($this->cache, $row->category);
+            } catch (NotFoundException $e) {
+                $this->logger->critical($e);
+                $browserType = null;
             }
+
+            $browser = new Browser(
+                $browserName,
+                null,
+                (new BrowserVersionMapper())->mapBrowserVersion($row->version, $browserName),
+                $browserType
+            );
+
+            if (!empty($row->os) && !in_array($row->os, ['iPad', 'iPhone'])) {
+                $osName    = (new PlatformNameMapper())->mapOsName($row->os);
+                $osVersion = (new PlatformVersionMapper())->mapOsVersion($row->os_version, $osName);
+
+                if (!($osVersion instanceof Version)) {
+                    $osVersion = null;
+                }
+
+                $os = new Os($osName, null, null, $osVersion);
+            } else {
+                $os = new Os(null, null);
+            }
+
+            $device = new Device(null, null);
+            $engine = new Engine(null);
+
+            yield $row['target'] => new Result($request, $device, $os, $browser, $engine);
         }
     }
 
     /**
-     * @return \Generator
+     * @return string[]
      */
     private function loadFromPath()
     {
@@ -123,26 +133,48 @@ class WootheeSource implements SourceInterface
             return;
         }
 
-        $this->output->writeln('    reading path ' . $path);
+        $this->logger->info('    reading path ' . $path);
 
-        $iterator = new \RecursiveDirectoryIterator($path);
+        $allTests = [];
+        $finder   = new Finder();
+        $finder->files();
+        $finder->name('*.yaml');
+        $finder->ignoreDotFiles(true);
+        $finder->ignoreVCS(true);
+        $finder->sortByName();
+        $finder->ignoreUnreadableDirs();
+        $finder->in($path);
 
-        foreach (new \RecursiveIteratorIterator($iterator) as $file) {
-            /** @var $file \SplFileInfo */
+        foreach ($finder as $file) {
+            /** @var \Symfony\Component\Finder\SplFileInfo $file */
             if (!$file->isFile()) {
+                continue;
+            }
+
+            if ('yaml' !== $file->getExtension()) {
                 continue;
             }
 
             $filepath = $file->getPathname();
 
-            $this->output->writeln('    reading file ' . str_pad($filepath, 100, ' ', STR_PAD_RIGHT));
-            switch ($file->getExtension()) {
-                case 'yaml':
-                    yield Yaml::parse(file_get_contents($filepath));
-                    break;
-                default:
-                    // do nothing here
-                    break;
+            $this->logger->info('    reading file ' . str_pad($filepath, 100, ' ', STR_PAD_RIGHT));
+            $data = Yaml::parse(file_get_contents($filepath));
+
+            if (!is_array($data)) {
+                continue;
+            }
+
+            foreach ($data as $row) {
+                if (empty($row['target'])) {
+                    continue;
+                }
+
+                if (array_key_exists($row['target'], $allTests)) {
+                    continue;
+                }
+
+                yield json_encode($row, JSON_FORCE_OBJECT);
+                $allTests[$row['target']] = 1;
             }
         }
     }
