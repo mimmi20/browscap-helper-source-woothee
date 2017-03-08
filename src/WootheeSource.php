@@ -95,16 +95,28 @@ class WootheeSource implements SourceInterface
                 $browserType = null;
             }
 
+            if (isset($row->version)) {
+                $browserVersion = $row->version;
+            } else {
+                $browserVersion = null;
+            }
+
             $browser = new Browser(
                 $browserName,
                 null,
-                (new BrowserVersionMapper())->mapBrowserVersion($row->version, $browserName),
+                (new BrowserVersionMapper())->mapBrowserVersion($browserVersion, $browserName),
                 $browserType
             );
 
             if (!empty($row->os) && !in_array($row->os, ['iPad', 'iPhone'])) {
+                if (isset($row->os_version)) {
+                    $osVersion = $row->os_version;
+                } else {
+                    $osVersion = null;
+                }
+
                 $osName    = (new PlatformNameMapper())->mapOsName($row->os);
-                $osVersion = (new PlatformVersionMapper())->mapOsVersion($row->os_version, $osName);
+                $osVersion = (new PlatformVersionMapper())->mapOsVersion($osVersion, $osName);
 
                 if (!($osVersion instanceof Version)) {
                     $osVersion = null;
@@ -118,7 +130,7 @@ class WootheeSource implements SourceInterface
             $device = new Device(null, null);
             $engine = new Engine(null);
 
-            yield $row['target'] => new Result($request, $device, $os, $browser, $engine);
+            yield $row->target => new Result($request, $device, $os, $browser, $engine);
         }
     }
 
